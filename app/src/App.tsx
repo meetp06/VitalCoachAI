@@ -22,6 +22,10 @@ const styles = `
     padding: 0;
   }
 
+  * {
+    border-radius: 0 !important;
+  }
+
   .card-floating {
     background: rgba(255, 255, 255, 0.45);
     backdrop-filter: blur(24px);
@@ -246,7 +250,7 @@ const DonutChart = () => {
 // 6. DASHBOARD PANEL
 // ==========================================
 const DashboardPanel = ({ greeting, dateString }: { greeting: string; dateString: string }) => (
-  <div className="w-full lg:w-[60%] lg:h-full flex flex-col scroll-hide lg:overflow-y-auto pb-6 sm:pb-10 lg:pr-4 shrink-0">
+  <div className="w-full lg:flex-1 lg:h-full flex flex-col scroll-hide lg:overflow-y-auto pb-6 sm:pb-10 lg:pr-4">
 
     <div className="mb-8 sm:mb-10 animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/60 backdrop-blur-md border border-white/80 text-[#3E2D25] text-[9px] font-bold tracking-widest uppercase mb-4 shadow-sm">
@@ -360,6 +364,22 @@ const DashboardPanel = ({ greeting, dateString }: { greeting: string; dateString
         </div>
       </div>
     </div>
+
+    {/* Sponsor bar */}
+    <div className="mt-8 pt-6 pb-2 flex flex-wrap items-center justify-start gap-4 sm:gap-6 opacity-80 border-t border-[#3E2D25]/10">
+      {[
+        { Icon: Cpu,          label: 'DeepMind' },
+        { Icon: Database,     label: 'Nexla' },
+        { Icon: MessageSquare,label: 'Assistant UI' },
+        { Icon: Cloud,        label: 'DigitalOcean' },
+      ].map(({ Icon, label }) => (
+        <div key={label} className="flex items-center gap-1 sm:gap-2 text-[#8C7A70] hover:text-[#3E2D25] transition-colors cursor-pointer">
+          <Icon size={14} className="shrink-0" />
+          <span className="text-[8px] sm:text-[9px] font-bold tracking-widest uppercase">{label}</span>
+        </div>
+      ))}
+    </div>
+
   </div>
 );
 
@@ -382,7 +402,7 @@ const CopilotPanel = ({
   messages, input, setInput, handleSend, handleAction, handleChipClick,
   isTyping, isRecording, messagesEndRef,
 }: CopilotPanelProps) => (
-  <div className="w-full lg:w-[40%] h-[600px] lg:h-full flex flex-col card-floating overflow-hidden relative animate-fade-in-up shrink-0" style={{ animationDelay: '0.4s' }}>
+  <div className="w-full lg:w-[400px] xl:w-[450px] h-[600px] lg:h-full flex flex-col card-floating overflow-hidden relative animate-fade-in-up shrink-0" style={{ animationDelay: '0.4s' }}>
 
     {/* Header */}
     <div className="px-6 sm:px-8 py-4 sm:py-6 border-b border-white/40 flex justify-between items-center z-10 bg-white/20 backdrop-blur-md">
@@ -688,13 +708,13 @@ const App = () => {
   };
 
   return (
-    <div className="min-h-[100dvh] bg-[#261B16] sm:p-4 lg:p-8 flex items-center justify-center" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+    <div className="h-[100dvh] w-full overflow-hidden bg-[#F6F5E9] flex flex-col" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
       <style dangerouslySetInnerHTML={{ __html: styles }} />
 
-      <div className="w-full max-w-[1500px] h-[100dvh] sm:h-[92vh] bg-[#F6F5E9] sm:rounded-[48px] sm:shadow-2xl relative overflow-hidden flex flex-col sm:border-[8px] border-[#3E2D25]">
+      <div className="w-full h-full relative overflow-hidden flex flex-col">
         <Header />
 
-        <main className="flex-1 flex flex-col lg:flex-row gap-6 sm:gap-8 px-4 sm:px-6 lg:px-10 pb-24 lg:pb-20 overflow-y-auto lg:overflow-hidden relative z-10">
+        <main className="flex-1 flex flex-col lg:flex-row gap-6 sm:gap-8 px-4 sm:px-6 lg:px-10 pb-6 sm:pb-8 overflow-y-auto lg:overflow-hidden relative z-10 w-full">
           <DashboardPanel greeting={greeting} dateString={dateString} />
           <CopilotPanel
             messages={messages}
@@ -708,21 +728,6 @@ const App = () => {
             messagesEndRef={messagesEndRef}
           />
         </main>
-
-        {/* Sponsor bar */}
-        <div className="absolute bottom-4 sm:bottom-6 left-1/2 transform -translate-x-1/2 flex items-center justify-center w-full px-4 gap-4 sm:gap-8 z-50">
-          {[
-            { Icon: Cpu,          label: 'DeepMind' },
-            { Icon: Database,     label: 'Nexla' },
-            { Icon: MessageSquare,label: 'Assistant UI' },
-            { Icon: Cloud,        label: 'DigitalOcean' },
-          ].map(({ Icon, label }) => (
-            <div key={label} className="flex items-center gap-1 sm:gap-2 text-[#8C7A70] hover:text-[#3E2D25] transition-colors cursor-pointer">
-              <Icon size={14} className="shrink-0" />
-              <span className="text-[8px] sm:text-[9px] font-bold tracking-widest uppercase">{label}</span>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
