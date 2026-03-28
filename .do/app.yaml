@@ -1,0 +1,37 @@
+name: vitalcoach
+region: nyc
+
+# ─── Frontend (Static Site) ───────────────────────
+# Built from app/ with Vite, served as a static site.
+# DigitalOcean handles CDN and HTTPS automatically.
+static_sites:
+  - name: vitalcoach-ui
+    source_dir: app
+    build_command: npm ci && npm run build
+    output_dir: dist
+    environment_slug: node-js
+    envs:
+      # Add your Gemini or Claude API key here for live AI responses
+      - key: VITE_GEMINI_API_KEY
+        scope: BUILD_TIME
+        type: SECRET
+
+# ─── MCP Server (Web Service) ─────────────────────
+# Node.js service that exposes health data via MCP.
+# Used by Claude Desktop or any MCP-compatible client.
+services:
+  - name: vitalcoach-mcp
+    source_dir: /
+    dockerfile_path: Dockerfile.mcp
+    http_port: 3000
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    health_check:
+      http_path: /health
+    envs:
+      - key: PORT
+        value: "3000"
+        scope: RUN_TIME
+      - key: VITA_CLOUD_URL
+        value: https://vita-cloud.hrishikesha40.workers.dev
+        scope: RUN_TIME
