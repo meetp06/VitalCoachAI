@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { GoogleGenAI } from '@google/genai'
@@ -27,7 +28,7 @@ async function askGemini(question: string, healthData: unknown): Promise<string>
     `Question: ${question}`
 
   const result = await ai.models.generateContent({
-    model: 'gemini-2.0-flash',
+    model: 'gemini-2.0-flash-lite',
     contents: prompt,
   })
 
