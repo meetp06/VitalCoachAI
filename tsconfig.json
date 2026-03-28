@@ -11,6 +11,6 @@
     "jsx": "react-jsx",
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["*.ts", "tools/**/*.ts", "resources/**/*.tsx"],
+  "include": ["*.ts", "tools/**/*.ts", "services/**/*.ts", "resources/**/*.tsx"],
   "exclude": ["node_modules", "dist"]
 }

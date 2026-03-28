@@ -1,8 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { existsSync, readFileSync, createReadStream } from 'node:fs'
+import { dirname, resolve, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createServer } from 'node:http'
+import { createServer, IncomingMessage } from 'node:http'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { askGemini } from './services/gemini.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { registerAppResource, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
 import { register as registerHealthSummary } from './tools/health-summary.js'
@@ -103,6 +104,21 @@ function createVitaMcpServer(): McpServer {
   return server
 }
 
+// --- Nexla health data store (in-memory) ---
+
+let latestHealthSummary: unknown = null
+
+function readBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let raw = ''
+    req.on('data', chunk => { raw += chunk })
+    req.on('end', () => {
+      try { resolve(JSON.parse(raw || 'null')) } catch { reject(new Error('Invalid JSON')) }
+    })
+    req.on('error', reject)
+  })
+}
+
 // --- HTTP server: new McpServer + transport per session ---
 
 const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>()
@@ -114,6 +130,47 @@ const httpServer = createServer(async (req, res) => {
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ status: 'ok', service: 'vita-mcp' }))
+    return
+  }
+
+  // Nexla ingest endpoint
+  if (url.pathname === '/api/health/ingest' && req.method === 'POST') {
+    try {
+      const body = await readBody(req)
+      latestHealthSummary = body
+      console.log('[ingest] received health summary:', JSON.stringify(body, null, 2))
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ success: true, message: 'Data received' }))
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Invalid JSON body' }))
+    }
+    return
+  }
+
+  // Gemini Q&A endpoint
+  if (url.pathname === '/api/health/ask' && req.method === 'POST') {
+    try {
+      if (!latestHealthSummary) {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ answer: 'No health data has been ingested yet. Please send data to /api/health/ingest first.', healthData: null }))
+        return
+      }
+      const body = await readBody(req) as { question?: string }
+      const question = body?.question?.trim()
+      if (!question) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Missing "question" field' }))
+        return
+      }
+      const answer = await askGemini(question, latestHealthSummary)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ answer, healthData: latestHealthSummary }))
+    } catch (err) {
+      console.error('[ask] error:', err)
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: String(err) }))
+    }
     return
   }
 
@@ -155,8 +212,57 @@ const httpServer = createServer(async (req, res) => {
     return
   }
 
-  res.writeHead(404)
-  res.end('Not found')
+  // Serve static frontend files — SPA fallback to index.html for non-API routes
+  const STATIC_DIR = existsSync(resolve(__dirname, 'public'))
+    ? resolve(__dirname, 'public')           // dev: project root/public
+    : resolve(__dirname, '../public')        // prod: dist/../public = /app/public
+
+  const MIME_TYPES: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.js':   'application/javascript',
+    '.mjs':  'application/javascript',
+    '.css':  'text/css',
+    '.json': 'application/json',
+    '.png':  'image/png',
+    '.jpg':  'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif':  'image/gif',
+    '.svg':  'image/svg+xml',
+    '.ico':  'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2':'font/woff2',
+    '.ttf':  'font/ttf',
+    '.map':  'application/json',
+  }
+
+  const reqPath = url.pathname === '/' ? '/index.html' : url.pathname
+  const filePath = resolve(STATIC_DIR, '.' + reqPath)
+
+  // Security: block path traversal
+  if (!filePath.startsWith(STATIC_DIR)) {
+    res.writeHead(403)
+    res.end('Forbidden')
+    return
+  }
+
+  const serveFile = (fPath: string) => {
+    const mime = MIME_TYPES[extname(fPath)] ?? 'application/octet-stream'
+    res.writeHead(200, { 'Content-Type': mime })
+    createReadStream(fPath).pipe(res)
+  }
+
+  if (existsSync(filePath)) {
+    serveFile(filePath)
+  } else {
+    // SPA fallback
+    const indexPath = resolve(STATIC_DIR, 'index.html')
+    if (existsSync(indexPath)) {
+      serveFile(indexPath)
+    } else {
+      res.writeHead(404)
+      res.end('Not found')
+    }
+  }
 })
 
 httpServer.listen(PORT, () => {
