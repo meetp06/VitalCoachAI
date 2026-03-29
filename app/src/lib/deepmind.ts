@@ -5,6 +5,7 @@
    Sponsor: Google DeepMind
    ────────────────────────────────────────────────── */
 
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { HealthContext, MealAnalysisResult, MoodCheckin, InsightResult } from './types.js';
 import { DEMO_MEAL_ANALYSIS, DEMO_MOOD_CHECKIN, DEMO_INSIGHT } from './demo-data.js';
 import { sanitizeOutput } from './safety.js';
@@ -14,29 +15,70 @@ import { sanitizeOutput } from './safety.js';
 const GEMINI_API_KEY = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GEMINI_API_KEY) || '';
 const USE_MOCK = !GEMINI_API_KEY;
 
-// ─── Meal Image Analysis ─────────────────────────
+// ─── Helpers ──────────────────────────────────────
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Strip markdown code fences from Gemini JSON responses */
+function extractJson(raw: string): string {
+  return raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+}
+
+function getModel(modelName = 'gemini-1.5-flash') {
+  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+  return genAI.getGenerativeModel({ model: modelName });
+}
+
+// ─── Meal Image Analysis ──────────────────────────
 
 export async function analyzeMealImage(
-  _imageDataUrl: string,
-  _healthContext: HealthContext
+  imageDataUrl: string,
+  healthContext: HealthContext
 ): Promise<MealAnalysisResult> {
   if (USE_MOCK) {
-    // Simulate API delay
     await delay(1500);
     return structuredClone(DEMO_MEAL_ANALYSIS);
   }
 
-  // Live Gemini Vision call would go here
-  // const response = await callGemini('gemini-pro-vision', { image, prompt });
-  await delay(1500);
-  return structuredClone(DEMO_MEAL_ANALYSIS);
+  try {
+    const model = getModel();
+    const base64 = imageDataUrl.split(',')[1] ?? imageDataUrl;
+    const mimeType = imageDataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
+
+    const prompt = `You are a nutrition analyst for a health app. Analyze this meal photo in the context of the user's current health data:
+- Current glucose: ${healthContext.summary.glucose ?? 'unknown'} mg/dL
+- HRV: ${healthContext.summary.hrv ?? 'unknown'} ms
+- Health score: ${healthContext.summary.healthScore}/100
+
+Return ONLY valid JSON with this exact structure — no extra text:
+{
+  "foods": [{ "name": "food name", "portion": "estimated portion", "confidence": 0.9 }],
+  "macros": { "calories": 0, "proteinG": 0, "carbsG": 0, "fatG": 0, "fiberG": 0 },
+  "glycemicImpact": "low|moderate|high",
+  "glycemicLoadEstimate": 0,
+  "contextualNote": "one sentence personalized to the user's current health data",
+  "disclaimer": "Nutritional estimates are approximate. Not medical advice."
+}`;
+
+    const result = await model.generateContent([
+      prompt,
+      { inlineData: { data: base64, mimeType } },
+    ]);
+
+    const parsed = JSON.parse(extractJson(result.response.text()));
+    return parsed as MealAnalysisResult;
+  } catch {
+    return structuredClone(DEMO_MEAL_ANALYSIS);
+  }
 }
 
 // ─── Voice Check-in Interpretation ────────────────
 
 export async function interpretVoiceCheckin(
   transcript: string,
-  _healthContext: HealthContext
+  healthContext: HealthContext
 ): Promise<MoodCheckin> {
   if (USE_MOCK) {
     await delay(1200);
@@ -47,13 +89,38 @@ export async function interpretVoiceCheckin(
     };
   }
 
-  // Live Gemini call: send transcript + health context for interpretation
-  await delay(1200);
-  return {
-    ...structuredClone(DEMO_MOOD_CHECKIN),
-    transcript,
-    timestamp: new Date().toISOString(),
-  };
+  try {
+    const model = getModel();
+
+    const prompt = `You are a wellness assistant analyzing a voice check-in from a health app user.
+
+User's current health data:
+- HRV: ${healthContext.summary.hrv ?? 'unknown'} ms
+- Sleep: ${healthContext.summary.healthLabel}
+- Health score: ${healthContext.summary.healthScore}/100
+
+Voice transcript: "${transcript}"
+
+Return ONLY valid JSON with this exact structure — no extra text:
+{
+  "transcript": "${transcript.replace(/"/g, "'")}",
+  "detectedMood": "one word mood (e.g. tired, energetic, stressed, calm, anxious, good)",
+  "detectedSymptoms": ["symptom1", "symptom2"],
+  "energyLevel": "low|moderate|high",
+  "stressLevel": "low|moderate|high",
+  "timestamp": "${new Date().toISOString()}"
+}`;
+
+    const result = await model.generateContent(prompt);
+    const parsed = JSON.parse(extractJson(result.response.text()));
+    return { ...parsed, transcript, timestamp: new Date().toISOString() } as MoodCheckin;
+  } catch {
+    return {
+      ...structuredClone(DEMO_MOOD_CHECKIN),
+      transcript,
+      timestamp: new Date().toISOString(),
+    };
+  }
 }
 
 // ─── Correlation & Insight Generation ─────────────
@@ -65,16 +132,53 @@ export async function generateInsight(
   if (USE_MOCK) {
     await delay(2000);
     const insight = structuredClone(DEMO_INSIGHT);
-    // Customize based on context
     if (userQuestion) {
       insight.observations[0] = `In response to "${userQuestion}": ${insight.observations[0]}`;
     }
     return insight;
   }
 
-  // Live Gemini call with wellness-only safety prompt
-  await delay(2000);
-  return structuredClone(DEMO_INSIGHT);
+  try {
+    const model = getModel();
+
+    const prompt = `You are VitalCoach, a wellness assistant. Analyze this health data and generate actionable wellness insights. Do NOT diagnose disease. Use cautious, evidence-based language.
+
+Health data:
+- Health score: ${healthContext.summary.healthScore}/100 (${healthContext.summary.healthLabel})
+- Sleep: ${healthContext.sleep?.duration ?? 'No data'}
+- HRV: ${healthContext.summary.hrv ?? 'No data'} ms
+- Glucose: ${healthContext.summary.glucose ?? 'No data'} mg/dL
+- Heart rate: ${healthContext.summary.heartRate ?? 'No data'} bpm
+- Steps: ${healthContext.summary.steps ?? 'No data'}
+${userQuestion ? `User question: "${userQuestion}"` : ''}
+
+Return ONLY valid JSON with this exact structure — no extra text:
+{
+  "observations": ["observation 1", "observation 2", "observation 3"],
+  "contributingFactors": [
+    { "name": "Factor Name", "detail": "explanation", "impact": "high|medium|low", "icon": "emoji" }
+  ],
+  "correlations": [
+    { "description": "correlation description", "strength": 0.8, "dataPoints": ["data point 1", "data point 2"] }
+  ],
+  "actionPlan": {
+    "rightNow": [{ "icon": "💧", "title": "Action title", "description": "Short description" }],
+    "nextMeal": [{ "icon": "🥗", "title": "Action title", "description": "Short description" }],
+    "tonight": [{ "icon": "😴", "title": "Action title", "description": "Short description" }]
+  },
+  "disclaimer": "These are wellness suggestions, not medical advice. Consult a healthcare professional for medical concerns."
+}`;
+
+    const result = await model.generateContent(prompt);
+    return JSON.parse(extractJson(result.response.text())) as InsightResult;
+  } catch {
+    await delay(2000);
+    const insight = structuredClone(DEMO_INSIGHT);
+    if (userQuestion) {
+      insight.observations[0] = `In response to "${userQuestion}": ${insight.observations[0]}`;
+    }
+    return insight;
+  }
 }
 
 // ─── Chat Response Generation ─────────────────────
@@ -89,9 +193,50 @@ export async function generateChatResponse(
     return { content: sanitizeOutput(result.content), suggestions: result.suggestions };
   }
 
-  await delay(1000);
-  const result = generateMockChatResponse(userMessage, healthContext);
-  return { content: sanitizeOutput(result.content), suggestions: result.suggestions };
+  try {
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-1.5-flash',
+      systemInstruction:
+        'You are VitalCoach, a personal wellness assistant with access to the user\'s real-time health data. ' +
+        'Give personalized, specific, evidence-based wellness advice using their actual numbers. ' +
+        'Be conversational and empathetic. Keep responses under 200 words. ' +
+        'Do NOT diagnose disease. Do NOT prescribe medication. ' +
+        'Always end with exactly 3 specific follow-up questions as a JSON array on the last line: ["q1","q2","q3"]',
+    });
+
+    const healthSummary = `
+User's current health data:
+• Health Score: ${healthContext.summary.healthScore}/100 (${healthContext.summary.healthLabel})
+• Sleep last night: ${healthContext.sleep?.duration ?? 'No data'} (target: 7.5h)
+• HRV: ${healthContext.summary.hrv ?? 'No data'} ms (healthy range: 40-60ms)
+• Fasting Glucose: ${healthContext.summary.glucose ?? 'No data'} mg/dL
+• Resting Heart Rate: ${healthContext.summary.heartRate ?? 'No data'} bpm
+• Steps today: ${healthContext.summary.steps?.toLocaleString() ?? 'No data'}
+• Dopamine debt: ${healthContext.summary.dopamineDebt ?? 'No data'}%`.trim();
+
+    const result = await model.generateContent(`${healthSummary}\n\nUser: ${userMessage}`);
+    const raw = result.response.text();
+
+    // Split off the suggestions JSON line if present
+    const lines = raw.trim().split('\n');
+    let suggestions: string[] = ['What should I eat for dinner?', 'How can I improve my HRV?', 'When should I stop drinking coffee?'];
+
+    const lastLine = lines[lines.length - 1].trim();
+    if (lastLine.startsWith('[')) {
+      try {
+        suggestions = JSON.parse(lastLine);
+        lines.pop();
+      } catch { /* keep defaults */ }
+    }
+
+    const content = sanitizeOutput(lines.join('\n').trim());
+    return { content, suggestions };
+  } catch {
+    await delay(1000);
+    const result = generateMockChatResponse(userMessage, healthContext);
+    return { content: sanitizeOutput(result.content), suggestions: result.suggestions };
+  }
 }
 
 // ─── Mock Chat Response Logic ─────────────────────
@@ -147,7 +292,6 @@ function generateMockChatResponse(message: string, ctx: HealthContext): { conten
     };
   }
 
-  // Breathing/meditation check — must come BEFORE the exercise pattern
   if (lower.match(/breath|meditat|calm down|relax|box breath/)) {
     return {
       content:
@@ -171,7 +315,7 @@ function generateMockChatResponse(message: string, ctx: HealthContext): { conten
     };
   }
 
-  if (lower.match(/workout|exerc|excer|exref|train|gym|run|walk|lift/)) {
+  if (lower.match(/workout|exerc|excer|train|gym|run|walk|lift/)) {
     return {
       content:
         `Given your current recovery state, I recommend keeping today's activity light:\n\n` +
@@ -220,9 +364,9 @@ function generateMockChatResponse(message: string, ctx: HealthContext): { conten
   }
 
   if (lower.match(/water|hydrat|fluid|drink.*liter|liter.*drink/)) {
-    const weightKg = 70; // estimated; real app would use profile
+    const weightKg = 70;
     const baselineLiters = (weightKg * 0.033).toFixed(1);
-    const adjustedLiters = (weightKg * 0.033 + 0.5).toFixed(1); // +0.5L for low HRV / poor sleep
+    const adjustedLiters = (weightKg * 0.033 + 0.5).toFixed(1);
 
     return {
       content:
@@ -248,9 +392,7 @@ function generateMockChatResponse(message: string, ctx: HealthContext): { conten
 
   if (lower.match(/coffee|caffeine|espresso|latte|cappuccino/)) {
     const sleepHours = ctx.sleep ? parseFloat(ctx.sleep.duration) : 5.1;
-    // Caffeine half-life ~5-6 hours; with poor sleep sensitivity is higher
-    // Stop time = target bedtime (10:30 PM) minus 2 half-lives
-    const stopHour = sleepHours < 6 ? 13 : 14; // 1 PM if sleep-deprived, 2 PM otherwise
+    const stopHour = sleepHours < 6 ? 13 : 14;
     const stopTime = stopHour === 13 ? '1:00 PM' : '2:00 PM';
 
     return {
@@ -259,8 +401,8 @@ function generateMockChatResponse(message: string, ctx: HealthContext): { conten
         `**Why this specific time?**\n` +
         `• Your sleep last night was only ${ctx.sleep?.duration ?? '5h 06m'} — poor sleep makes you more caffeine-sensitive\n` +
         `• Caffeine has a 5-6 hour half-life; to clear 75% before a 10:30 PM bedtime you need to cut off by ${stopTime}\n` +
-        `• Your HRV of ${ctx.summary.hrv ?? 28}ms already shows nervous system stress — caffeine after ${stopTime} will amplify this and delay sleep onset\n\n` +
-        `**Alternative:** After ${stopTime}, switch to herbal tea or sparkling water with lemon to maintain the ritual without the stimulant.`,
+        `• Your HRV of ${ctx.summary.hrv ?? 28}ms already shows nervous system stress — caffeine after ${stopTime} will amplify this\n\n` +
+        `**Alternative:** After ${stopTime}, switch to herbal tea or sparkling water with lemon.`,
       suggestions: [
         'How much coffee is safe for me today?',
         'What can I drink instead of coffee in the afternoon?',
@@ -320,10 +462,4 @@ function generateMockChatResponse(message: string, ctx: HealthContext): { conten
       'What time should I stop drinking coffee?',
     ],
   };
-}
-
-// ─── Utility ──────────────────────────────────────
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
